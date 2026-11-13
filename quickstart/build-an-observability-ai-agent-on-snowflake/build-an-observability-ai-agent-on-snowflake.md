@@ -473,6 +473,8 @@ snow streamlit deploy refund_truth_sis --connection "$REFUND_LAB_CONNECTION" \
 
 The fixed scenario set is on by default; turn it off in the sidebar for random orders. Langfuse's judges score a few moments after each run, so the app waits up to 3 minutes for them before exporting.
 
+The app writes its runs with ordinary inserts, because streaming from inside the app would mean storing the streamer's private key in it. It reads the leaderboard on `REFUND_LAB_IWH` only when that warehouse is already running, and a caption under Pick a winner says which warehouse served it. The app never resumes the interactive warehouse itself: each resume starts a new one-hour minimum charge.
+
 ## Clean Up
 
 Suspend what bills by the hour after each session:
