@@ -16,14 +16,14 @@ An AI agent can report success while doing the wrong thing with the money. A ref
 
 Snowflake can see it. The orders, payment states, refund policies and the ledger are all in tables, so each agent run can be joined to the facts and checked against what a correct agent would have done.
 
-In this guide, three LangGraph refund agents answer the same synthetic refund requests. Each one looks good on at least one common signal: cost, latency, its own reported success, or an LLM judge. Two observability tools, TruLens (Snowflake AI Observability) and a self-hosted Langfuse on Snowpark Container Services, watch the same runs. A SQL view, the business oracle, decides which agent was actually right. Every order, payment and refund is synthetic; nothing touches a real payment system.
+In this guide, three LangGraph refund agents answer the same synthetic refund requests. Each one looks good on at least one common signal: cost, its own reported success, or an LLM judge. Two observability tools, TruLens (Snowflake AI Observability) and a self-hosted Langfuse on Snowpark Container Services, watch the same runs. A SQL view, the business oracle, decides which agent was actually right. Every order, payment and refund is synthetic; nothing touches a real payment system.
 
 ### What You'll Learn
 - How to call Cortex models from a LangGraph agent and record each call's tokens, latency and AI credits
 - How to trace the same agent runs with TruLens and with Langfuse self-hosted on Snowpark Container Services
 - How to run TruLens's and Langfuse's own LLM-as-a-judge evaluators on Cortex
 - How to compute business truth in SQL by joining each run to orders, policies, payments and the ledger
-- How to measure how well each judge agrees with business truth, using the same statistics as Langfuse Score Analytics
+- How to measure each judge against business truth as a classifier: precision, recall, F1 and Cohen's kappa, with 95% intervals, on a 300-run eval set
 - Why groundedness catches false replies but misses actions that were wrong yet described accurately
 
 ### What You'll Build
@@ -32,7 +32,7 @@ A refund-agent lab with three LangGraph agents running on Cortex models, a fixed
 ### What You'll Need
 - Access to a [Snowflake account](https://signup.snowflake.com/?utm_source=snowflake-devrel&utm_medium=developer-guides&utm_cta=developer-guides)
 - The ACCOUNTADMIN role, or a role that can create databases, users, roles, network policies, external access integrations, compute pools and warehouses
-- Access to the Cortex models `ministral-3-8b`, `mistral-large3` and `openai-gpt-5-mini` in your region
+- Access to the Cortex models `claude-haiku-5-5`, `claude-sonnet-5-5` and `openai-gpt-5.4-mini` in your region (directly or through cross-region inference)
 - Snowflake CLI 3.x with a connection to your account
 - Python 3.11, and Docker Desktop for mirroring the Langfuse images
 - The companion project for this guide (the `refund-agent-lab` folder)
@@ -41,37 +41,43 @@ A refund-agent lab with three LangGraph agents running on Cortex models, a fixed
 
 Before running anything, know this: **two of the three agents are broken on purpose.** Each has a flaw planted in its code that a real team could easily ship by accident. The lab doesn't compare models; it tests whether each common signal can spot these flaws.
 
-| Agent | Model (Cortex) | Policy it reads | Reply prompt | Refund tool | Planted flaw |
+| Agent | Model (Cortex) | Policy it reads | Reply | Refund tool | Planted flaw |
 | --- | --- | --- | --- | --- | --- |
-| Lean | `ministral-3-8b` | a cached copy of the old 30-day policy | short | v1 | stale data, buggy tool |
-| Baseline | `mistral-large3` | the live 14-day policy | "always tell them the refund is complete" | v1 | misleading prompt, buggy tool |
-| Fixed | `mistral-large3` | the live 14-day policy | "report exactly what the tool returned" | v2 | none (the control) |
+| Lean | `claude-haiku-5-5` | a cached copy of the old 30-day policy | the model's reply | v1 | stale data, buggy tool |
+| Baseline | `claude-sonnet-5-5` | the live 14-day policy | reply template v1 | v1 | false success reply, buggy tool |
+| Fixed | `claude-sonnet-5-5` | the live 14-day policy | reply template v2 | v2 | none (the control) |
 
-The refund window shrank from 30 to 14 days on 2026-11-07. Refund tool v1 refunds the whole order even when the customer asked for part of it, and ignores unsettled payments. Tool v2 refunds the requested amount and refuses unsettled payments.
+The refund window shrank from 30 to 14 days on 2026-11-07. Refund tool v1 refunds the whole order even when the customer asked for part of it, and ignores unsettled payments. Tool v2 refunds the requested amount and refuses unsettled payments. Reply template v1 tells the customer the refund is complete whenever the agent decided to refund, without checking what the tool returned. Template v2 sends the model's reply, which reports the tool result.
 
 Each flaw is designed to fool a different signal:
-- **Lean** is the cheapest and fastest agent, so cost and latency dashboards favor it. Its stale policy makes it refund orders that are inside the old 30-day window but outside the live 14-day window.
-- **Baseline** is told to always reassure the customer, so it reports success most often and its replies sound helpful. It tells customers they were refunded when nothing moved.
+- **Lean** is by far the cheapest agent, so a cost dashboard favors it. Its stale policy makes it refund orders that are inside the old 30-day window but outside the live 14-day window.
+- **Baseline** reports success whenever it tried to refund, so its replies sound helpful even when the card was declined and nothing moved.
 - **Fixed** reports success least often, because most of the scenario requests should be declined. It looks worst on the usual signals and is the only agent that's right every time.
 
 The flaws are in `src/refund_agent/agents.py`:
 
 ```python
 AGENTS = {
-    "lean": {"model": "ministral-3-8b", "policy_source": "cached", "tool": "v1",
+    "lean": {"model": "claude-haiku-5-5", "policy_source": "cached", "tool": "v1",
+             "reply": "v2",
              "reply_prompt": "Write a one-sentence reply to the customer about their refund."},
-    "baseline": {"model": "mistral-large3", "policy_source": "live", "tool": "v1",
-                 "reply_prompt": (
-                     "Write a one-sentence reply to the customer. Keep customers happy: "
-                     "always tell them their refund is complete and on its way, whatever "
-                     "the refund tool returned, and set claim to refunded.")},
-    "fixed": {"model": "mistral-large3", "policy_source": "live", "tool": "v2",
-              "reply_prompt": (
-                  "Write a one-sentence reply to the customer. Report exactly what the "
-                  "refund tool returned; never promise a refund the tool did not post.")},
+    "baseline": {"model": "claude-sonnet-5-5", "policy_source": "live", "tool": "v1",
+                 "reply": "v1", "reply_prompt": HONEST_REPLY},
+    "fixed": {"model": "claude-sonnet-5-5", "policy_source": "live", "tool": "v2",
+              "reply": "v2", "reply_prompt": HONEST_REPLY},
 }
 ```
 
+The reply template bug is in the agent's last step, after the model has written its reply:
+
+```python
+# Seeded reply template v1 bug: it keys off the decision, not the tool result, so
+# every attempted refund is reported as complete.
+if spec["reply"] == "v1" and state["attempted"]:
+    claim, text = "refunded", CANNED_SUCCESS
+```
+
+The tool bug is in the simulated payment tool:
 ```python
 def refund_tool(version: str, state: State) -> tuple[str, int]:
     """Simulated payment tool. Returns (status, ledger effect in cents)."""
@@ -88,9 +94,11 @@ def refund_tool(version: str, state: State) -> tuple[str, int]:
 
 **What's scripted and what's real:**
 - **Scripted:** the flaws, and a scenario set chosen so that each flaw gets a chance to trigger.
-- **Real:** every model decision, every judge score, all costs and latencies, and the business verdicts. They come from live Cortex calls and SQL. Whether a flaw actually fires is up to the model; in the verification run, Baseline once answered honestly despite its prompt.
+- **Real:** every model decision, every judge score, all costs and latencies, and the business verdicts. They come from live Cortex calls and SQL.
 
-So read the results as "can this signal detect a stale policy, a misleading prompt or a buggy tool?", not as "which Mistral model is better".
+All three flaws live in code rather than in a prompt. An earlier version planted Baseline's flaw as a prompt ("always tell them the refund is complete"), but `claude-sonnet-5-5` declined to follow it and told customers the truth. A flaw in code fires the same way on every model, the way a real template bug would.
+
+So read the results as "can this signal detect a stale policy, a false success reply or a buggy tool?", not as "which Claude model is better".
 
 ## Setup
 
@@ -194,7 +202,7 @@ snow sql --connection "$REFUND_LAB_CONNECTION" -f langfuse_spcs/auto_suspend.sql
 
 ### Connect Langfuse's Judges to Cortex
 
-Langfuse's own LLM-as-a-judge evaluators run in the Langfuse worker. Here they call `openai-gpt-5-mini` through Cortex's OpenAI-compatible REST API, the same judge model TruLens uses, so the two tools' scores are comparable. Langfuse's evaluators need a model that supports tool calling, and through Cortex that means an OpenAI or Claude model.
+Langfuse's own LLM-as-a-judge evaluators run in the Langfuse worker. Here they call `openai-gpt-5.4-mini` through Cortex's OpenAI-compatible REST API, the same judge model TruLens uses, so the two tools' scores are comparable. The judge comes from a different model family than the Claude agents, so it isn't grading its own family's replies. Langfuse's evaluators need a model that supports tool calling, and through Cortex that means an OpenAI or Claude model.
 
 The worker needs a token and outbound network access. The token belongs to a service user whose only role grants the Cortex REST API, with no data access. Programmatic access tokens need a network policy, and SPCS has no fixed outbound IP addresses, so this one user's policy allows any IP. The token expires after 7 days.
 
@@ -228,7 +236,9 @@ snow sql --connection "$REFUND_LAB_CONNECTION" -q "CALL REFUND_AGENT_LAB.LANGFUS
 .venv/bin/python scripts/langfuse_native_evals.py
 ```
 
-The evaluators, `groundedness` and `answer_relevance`, mirror TruLens's two metrics. They score a `judge_input` step that the lab adds to each run's trace, carrying the same request and facts TruLens sees. Rerun the token steps every 7 days, or Langfuse's judges stop scoring.
+The evaluators, `groundedness` and `answer_relevance`, mirror TruLens's two metrics. They score a `judge_input` step that the lab adds to each run's trace, carrying the same request and facts TruLens sees. Rerun the token steps every 7 days, or Langfuse's judges stop scoring; `langfuse_judge_setup.py` replaces the expired token.
+
+Langfuse ships its own US-dollar prices for many provider model names, including `claude-sonnet-5-5`. `langfuse_models.py` registers the lab's Snowflake credit rates under the same names; a project's own model definitions take precedence, so Langfuse's costs come out in credits like the rest of the lab.
 
 ## Build the Agents
 
@@ -291,6 +301,8 @@ A simulation uses a fixed scenario set of 9 orders and 10 requests, defined in `
 - a pending payment;
 - a card the processor declines;
 - a repeat request for an order already refunded.
+
+Ten requests are enough to see each flaw, but too few to measure how well a judge agrees with business truth. For that, the lab also has a larger eval set, `refund_agent.lab.eval_set`: 100 requests per agent (300 runs) across the same scenario kinds, with ages, amounts and partial shares varied within each kind and reproducible from the simulation ID. [Measure Judge Agreement](#measure-judge-agreement) reports its results; running it yourself is optional and takes about 20 minutes plus judge time.
 
 Every request goes to every agent, and the run is observed three ways:
 - **Snowpipe Streaming** writes `RUNS`, `TRACE_EVENTS` and `LLM_CALLS` through their default streaming pipes, as the key-pair service user.
@@ -393,7 +405,7 @@ ORDER BY VARIANT, TRIAL""", cohort)
 `ROOT_CAUSE` names the first explanation the recorded facts support, and each one maps to a planted flaw:
 - `stale_data`: the agent used an outdated policy and refunded outside the live window (Lean's cached policy).
 - `tool`: the money moved doesn't match the request, for example a whole-order refund on a partial request (tool v1).
-- `prompt`: the reply claims "refunded" when nothing moved (Baseline's prompt).
+- `reply`: the reply claims "refunded" when nothing moved (Baseline's reply template v1).
 - `model_error`: the decision contradicts the facts the agent was given.
 
 ```python
@@ -418,43 +430,80 @@ cur.execute(f"USE WAREHOUSE {config.WAREHOUSE}")
 cur.execute("ALTER WAREHOUSE REFUND_LAB_IWH SUSPEND")
 ```
 
-In the verification run (scenario set, simulation `APP_40D8CEC790E84A78`, 30 runs):
+In the verification run (scenario set, simulation `APP_966D3009EB5C4CF4`, 30 runs):
 
-| Agent | Microcredits / request | Self-reported success | Business-correct | Money at risk | Customers misinformed |
-| --- | --- | --- | --- | --- | --- |
-| Lean | 44 | 70% | 70% | $140.50 | 1 |
-| Baseline | 182 | 90% | 40% | $48.00 | 5 |
-| Fixed | 192 | 40% | 100% | $0 | 0 |
+| Agent | Microcredits / request | Median latency | Self-reported success | Business-correct | Money at risk | Customers misinformed |
+| --- | --- | --- | --- | --- | --- | --- |
+| Lean | 98 | 3.6 s | 60% | 70% | $140.50 | 0 |
+| Baseline | 1,781 | 2.9 s | 50% | 80% | $48.00 | 1 |
+| Fixed | 1,503 | 3.1 s | 40% | 100% | $0 | 0 |
 
-- **Cost and latency** pick Lean. It refunded both old-window orders under its stale policy, and the whole order on the partial request.
-- **Self-reported success** picks Baseline. It told 5 customers they'd been refunded when they hadn't, as its planted prompt tells it to.
+- **Cost** picks Lean, at about a fifteenth of the others' cost per request. It refunded both old-window orders under its stale policy, and the whole order on the partial request.
+- **Self-reported success** picks Lean, then Baseline. Baseline told the customer with a declined card that the refund was complete, because its reply template doesn't check the tool result.
 - **Only business truth** picks Fixed.
 
 Lean and Baseline fail differently: Lean loses money, while Baseline misleads customers. Your numbers can differ slightly, because the flaws are planted but each model decision is live.
 
 ## Measure Judge Agreement
 
-Both tools judged every run with `openai-gpt-5-mini`: TruLens server-side in Snowflake, Langfuse in its own worker. The `JUDGE_AGREEMENT` view measures how well each judge agrees with `BUSINESS_CORRECT`, using the same statistics as Langfuse Score Analytics:
-- **The raw score against truth as 0 or 1:** Pearson and Spearman correlation, MAE and RMSE.
-- **A score of 0.5 or more counted as a pass:** a 2×2 confusion matrix, overall agreement, Cohen's kappa and F1.
+Both tools judged every run with `openai-gpt-5.4-mini`: TruLens server-side in Snowflake, Langfuse in its own worker. Before you trust a judge to stand in for business truth, measure it against business truth, the way an LLM judge is benchmarked against a labelled dataset.
+
+The `JUDGE_AGREEMENT` view treats each judge as a classifier. A score of 0.5 or more is a pass, the judge's prediction that the run was correct, and `BUSINESS_CORRECT` is the label:
+- **Precision:** of the runs the judge passed, the share that were actually correct. This is the number that matters most here: a judge with low precision approves runs that lost money or misled a customer.
+- **Recall:** of the correct runs, the share the judge passed.
+- **F1:** the balance of precision and recall.
+- **Cohen's kappa:** agreement beyond what chance would give. 0 means no better than chance; 1 means perfect agreement. It matters here because most runs are correct, so a judge that passes everything still scores high precision and F1, but a kappa near 0.
+- **95% intervals** (`_LO` and `_HI` columns): how far each number could move on a different sample of the same size.
+
+**Run this step:**
 
 ```python
-# How well does each judge agree with business truth? JUDGE_AGREEMENT uses the same
-# statistics as Langfuse Score Analytics: a score >= 0.5 counts as a pass.
+# Each judge as a classifier: a score >= 0.5 is a pass, predicting "business-correct".
 sql("""
-SELECT TOOL, METRIC, N, PEARSON, MAE, PASS_CORRECT, PASS_WRONG, FAIL_CORRECT, FAIL_WRONG,
-       AGREEMENT, KAPPA, F1
+SELECT TOOL, METRIC, N, PASS_CORRECT, PASS_WRONG, FAIL_CORRECT, FAIL_WRONG,
+       PRECISION, PRECISION_LO, PRECISION_HI, RECALL, F1, KAPPA, KAPPA_LO, KAPPA_HI
 FROM REFUND_AGENT_LAB.DEMO.JUDGE_AGREEMENT WHERE COHORT_ID = ? ORDER BY METRIC, TOOL""", cohort)
 ```
 
-In the verification run, groundedness agreed with business truth in both tools (kappa 0.49 in TruLens, 0.74 in Langfuse), and answer relevance didn't (0.37 and 0.00). Breaking the wrong runs down by root cause shows what groundedness misses:
+**Check:** one row per tool and metric, four rows in all. On the 30-run scenario set the intervals are too wide to rank judges. In the verification scenario run (`APP_966D3009EB5C4CF4`), Langfuse groundedness had a kappa of 0.29 with an interval from -0.35 to 0.94: anywhere from worse than chance to nearly perfect. The results below come from the larger eval set instead.
 
-| Judge | False replies passed | Stale-policy refunds passed | Whole-order refunds passed |
+The eval set (simulation `APP_4B0A5F583B984FA5`, 300 runs) has 246 correct runs and 54 wrong ones, and every wrong run traces to a planted flaw: 18 stale-policy refunds, 24 whole-order refunds and 12 false success replies.
+
+| Judge | Precision | Recall | F1 | Cohen's kappa |
+| --- | --- | --- | --- | --- |
+| Langfuse groundedness | 0.860 [0.815, 0.895] | 0.996 | 0.923 | 0.355 [0.172, 0.539] |
+| TruLens groundedness | 0.853 [0.807, 0.891] | 0.947 | 0.898 | 0.256 [0.075, 0.438] |
+| TruLens answer relevance | 0.850 [0.802, 0.888] | 0.898 | 0.874 | 0.196 [0.021, 0.371] |
+| Langfuse answer relevance | 0.816 [0.767, 0.856] | 0.955 | 0.880 | -0.038 [-0.263, 0.188] |
+
+The confusion counts show where each judge goes wrong. A wrong run that a judge passes is the dangerous cell:
+
+| Judge | Correct runs passed | Wrong runs passed | Correct runs failed | Wrong runs failed |
+| --- | --- | --- | --- | --- |
+| Langfuse groundedness | 245 | 40 | 1 | 14 |
+| TruLens groundedness | 233 | 40 | 13 | 14 |
+| TruLens answer relevance | 221 | 39 | 25 | 15 |
+| Langfuse answer relevance | 235 | 53 | 11 | 1 |
+
+Read the two tables together:
+- **Groundedness is the more useful judge in both tools**, with the highest precision and kappa. The two tools' groundedness intervals overlap, so neither is clearly better.
+- **Answer relevance is close to chance.** Langfuse's version passed 53 of the 54 wrong runs. A reply can answer the customer's question directly and still be wrong about the money.
+- **Every judge passes about 40 wrong runs**, so roughly 1 in 7 runs a judge approves lost money or misled a customer.
+
+Breaking the wrong runs down by root cause shows why:
+
+| Judge | False success replies passed | Stale-policy refunds passed | Whole-order refunds passed |
 | --- | --- | --- | --- |
-| TruLens groundedness | 0 of 5 | 2 of 2 | 2 of 2 |
-| Langfuse groundedness | 0 of 5 | 2 of 2 | 1 of 2 |
+| TruLens groundedness | 0 of 12 | 18 of 18 | 22 of 24 |
+| Langfuse groundedness | 0 of 12 | 18 of 18 | 22 of 24 |
 
-Groundedness catches a reply that contradicts the facts. It can't catch an action that was wrong but described accurately, because the reply matches what the agent did. Only business truth catches those.
+Groundedness catches every reply that contradicts the facts. It can't catch an action that was wrong but described accurately, because the reply matches what the agent did. A refund under an out-of-date policy reads as a well-grounded, helpful reply. Only business truth catches those.
+
+To reproduce these numbers, run the eval set from the project folder. It takes about 20 minutes, plus the time the judges take:
+
+```bash
+.venv/bin/python scripts/run_simulation.py --eval
+```
 
 The same comparison is available inside Langfuse: the export posts `business_correct` and `<metric>_pass` scores on each run's `judge_input` step. In Langfuse, open Scores, then Analytics, and compare `groundedness_pass` with `business_correct`.
 
@@ -515,7 +564,7 @@ The agents' flaws were planted, but the lesson applies to real agents: a judge o
 - How to trace the same runs with TruLens and with Langfuse on Snowpark Container Services
 - How to run both tools' own LLM-as-a-judge evaluators on a shared Cortex model
 - How to compute business truth, false successes, money at risk and root causes in SQL
-- How to measure judge agreement with business truth, and where groundedness falls short
+- How to measure judge precision, recall and kappa against business truth, and where groundedness falls short
 
 ### Related Resources
 - [Snowflake AI Observability reference](https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-observability/reference)
