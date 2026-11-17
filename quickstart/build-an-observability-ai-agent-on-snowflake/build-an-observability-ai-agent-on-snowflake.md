@@ -42,14 +42,14 @@ With the prerequisites in place, here's the system you'll have at the end.
 
 ### What You'll Build
 
-![Architecture: three LangGraph agents call Cortex models and stream run rows through Snowpipe Streaming into Snowflake tables; TruLens and Langfuse trace and judge the same runs; the RUN_EVIDENCE view joins runs to business facts, JUDGE_AGREEMENT compares the judges with it, and the Streamlit app reads both, with the leaderboard served by an interactive warehouse.](assets/architecture-diagram.png)
+![Architecture: three LangGraph agents, run from the notebook or the Streamlit app, read business facts, call Cortex models and stream run rows through Snowpipe Streaming into Snowflake tables. TruLens and Langfuse trace the same runs and judge them on Cortex. The RUN_EVIDENCE view joins runs to business facts, JUDGE_AGREEMENT compares both tools' scores with it, and the app reads both, with the leaderboard served by an interactive warehouse.](assets/architecture-diagram.png)
 
-1. **Agents:** three LangGraph refund agents (Lean, Baseline and Fixed) handle each request in four steps and call Cortex models for their decisions and replies.
-2. **Streaming:** every finished run lands in the `RUNS`, `TRACE_EVENTS` and `LLM_CALLS` tables through each table's default Snowpipe Streaming pipe.
-3. **Observers:** TruLens records each agent as a version of one External Agent and judges its runs inside Snowflake. Langfuse, running in your account on Snowpark Container Services, traces the same runs and judges them with its own evaluators. Both judges use the same Cortex model.
+1. **Agents:** three LangGraph refund agents (Lean, Baseline and Fixed) handle each request in four steps. They read the order, payment and policy facts, and call Cortex models for their decisions and replies. You run them from the notebook or from the Streamlit app.
+2. **Streaming:** every finished run lands in the `RUNS`, `TRACE_EVENTS` and `LLM_CALLS` tables through each table's default Snowpipe Streaming pipe: the Python SDK from the notebook, the REST API from the app.
+3. **Observers:** TruLens records each agent as a version of one External Agent and judges its runs inside Snowflake; `TRULENS_SCORES` is a view over the AI Observability events it writes. Langfuse, running in your account on Snowpark Container Services, traces the same runs and judges them with its own evaluators; an export copies its traces and scores into `LANGFUSE_TRACES` and `LANGFUSE_SCORES`. Both tools judge with the same Cortex model, `openai-gpt-5.4-mini`.
 4. **Business truth:** the `RUN_EVIDENCE` view joins each run to the orders, payments and refund policies and decides whether it was right. It never looks at a judge score.
 5. **Judge agreement:** the `JUDGE_AGREEMENT` view treats each judge's scores as predictions and business truth as the label.
-6. **App:** a Streamlit in Snowflake app shows the usual signals first, lets you pick a winning agent, then reveals business truth. An interactive warehouse can serve its leaderboard.
+6. **App:** the Streamlit in Snowflake app runs simulations, shows the usual signals first, lets you pick a winning agent, then reveals business truth and judge agreement. An interactive warehouse can serve its leaderboard, which combines `RUN_EVIDENCE` with both tools' scores.
 
 Before running anything, it helps to know how the three agents differ.
 
