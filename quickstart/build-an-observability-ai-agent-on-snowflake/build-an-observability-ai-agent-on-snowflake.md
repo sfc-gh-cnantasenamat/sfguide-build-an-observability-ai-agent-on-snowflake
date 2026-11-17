@@ -532,7 +532,14 @@ snow streamlit deploy refund_truth_sis --connection "$REFUND_LAB_CONNECTION" \
 
 The fixed scenario set is on by default; turn it off in the sidebar for random orders. Langfuse's judges score a few moments after each run, so the app waits up to 3 minutes for them before exporting.
 
-The app writes its runs with ordinary inserts, because streaming from inside the app would mean storing the streamer's private key in it. It reads the leaderboard on `REFUND_LAB_IWH` only when that warehouse is already running, and a caption under Pick a winner says which warehouse served it. The app never resumes the interactive warehouse itself: each resume starts a new one-hour minimum charge.
+The sidebar has two more switches:
+
+- **Write with Snowpipe Streaming** is on by default. A Streamlit app on container runtime can't sign in with an outside key pair, so the app doesn't use `REFUND_LAB_STREAMER`. It streams through the Snowpipe Streaming REST API with the session token Snowflake gives its container, as the app's owner role, so it needs no secret or extra integration. A note after each run lists the rows committed per table. If streaming fails, the run stops with an error instead of hanging; turn the switch off to use ordinary inserts.
+- **Serve the leaderboard on the interactive warehouse** is off by default. Turning it on resumes `REFUND_LAB_IWH`, and a caption under Pick a winner says which warehouse served the leaderboard. Each resume bills at least one hour and the warehouse can't auto-suspend in under 24 hours, so click **Suspend REFUND_LAB_IWH** next to that caption when you're done. The app's owner role needs OPERATE and USAGE on the warehouse; ACCOUNTADMIN, used throughout this guide, has both.
+
+**Check:** after a run, a note starts with `Snowpipe Streaming committed rows:`, for example `RUNS 30, TRACE_EVENTS 90, LLM_CALLS 60` on the scenario set. With the interactive warehouse on, the caption reads `Leaderboard served by the interactive warehouse REFUND_LAB_IWH`.
+
+When you finish with the app, the next section suspends what bills by the hour.
 
 ## Clean Up
 
