@@ -521,30 +521,18 @@ The same comparison is available inside Langfuse: the export posts `business_cor
 
 The Streamlit in Snowflake app runs the same simulation from a browser. It has three sections: Pick a winner (business truth hidden until you reveal it), Refund requests, and Investigate.
 
-The app needs outbound access to Langfuse and a secret holding the Langfuse address. To write with Snowpipe Streaming it also needs the streamer's private key as a Snowflake secret, plus outbound access to the hosts the streaming SDK calls. `scripts/app_streaming_setup.py` reads the key from `~/.snowflake/keys/refund_lab_streamer.p8`, stores it in the secret `STREAMER_PRIVATE_KEY`, and finds the account, ingest and stage hosts with `SYSTEM$ALLOWLIST()`, so nothing account-specific is typed by hand.
-
-**Run this step:**
+The app needs outbound access to Langfuse, and a secret holding the Langfuse address:
 
 ```bash
 snow sql --connection "$REFUND_LAB_CONNECTION" -f sql/app_access.sql -D langfuse_host=<ingress_url without https://>
-.venv/bin/python scripts/app_streaming_setup.py
 bash scripts/sync_app_package.sh
 snow streamlit deploy refund_truth_sis --connection "$REFUND_LAB_CONNECTION" \
   --project "$PWD/refund_truth_sis" --replace --prune --env warehouse="$REFUND_LAB_WAREHOUSE"
 ```
 
-**Check:** the setup script prints `Secret, network rule (N hosts) and REFUND_LAB_STREAM_EAI are ready.`, and the deploy prints the app's URL.
-
 The fixed scenario set is on by default; turn it off in the sidebar for random orders. Langfuse's judges score a few moments after each run, so the app waits up to 3 minutes for them before exporting.
 
-The sidebar has two more switches:
-
-- **Write with Snowpipe Streaming** is on when the app has the streamer key. Runs, trace events and model calls stream as `REFUND_LAB_STREAMER`, and a note after the run lists the rows committed per table. If streaming can't start, the run falls back to ordinary inserts and a note says why.
-- **Serve the leaderboard on the interactive warehouse** is off by default. Turning it on resumes `REFUND_LAB_IWH`, and a caption under Pick a winner says which warehouse served the leaderboard. Each resume bills at least one hour, and the warehouse can't auto-suspend in under 24 hours, so use the **Suspend REFUND_LAB_IWH** button next to that caption when you're done. The app's owner role needs OPERATE and USAGE on the warehouse; ACCOUNTADMIN, used throughout this guide, has both.
-
-**Check:** after a run with streaming on, a note starts with `Snowpipe Streaming committed rows:`. With the interactive warehouse on, the caption reads `Leaderboard served by the interactive warehouse REFUND_LAB_IWH`.
-
-The secret is readable only by roles with USAGE on it, and the app's code is what reads it, so share the app only with roles you'd trust to write run events.
+The app writes its runs with ordinary inserts, because streaming from inside the app would mean storing the streamer's private key in it. It reads the leaderboard on `REFUND_LAB_IWH` only when that warehouse is already running, and a caption under Pick a winner says which warehouse served it. The app never resumes the interactive warehouse itself: each resume starts a new one-hour minimum charge.
 
 ## Clean Up
 
@@ -567,7 +555,6 @@ DROP USER IF EXISTS REFUND_LAB_STREAMER;
 DROP NETWORK POLICY IF EXISTS REFUND_LAB_JUDGE_POLICY;
 DROP INTEGRATION IF EXISTS LANGFUSE_CORTEX_EAI;
 DROP INTEGRATION IF EXISTS REFUND_LAB_APP_EAI;
-DROP INTEGRATION IF EXISTS REFUND_LAB_STREAM_EAI;
 DROP DATABASE IF EXISTS REFUND_AGENT_LAB;
 DROP ROLE IF EXISTS REFUND_LAB_JUDGE_ROLE;
 DROP ROLE IF EXISTS REFUND_LAB_STREAM_ROLE;
