@@ -8,7 +8,7 @@ status: Published
 feedback link: https://github.com/Snowflake-Labs/sfquickstarts/issues
 fork repo link: https://github.com/sfc-gh-cnantasenamat/build-an-observability-ai-agent-on-snowflake
 
-# Observe AI Agents with TruLens, Langfuse and Snowflake Business Truth
+# Build an Observability AI Agent on Snowflake
 
 ## Overview
 
