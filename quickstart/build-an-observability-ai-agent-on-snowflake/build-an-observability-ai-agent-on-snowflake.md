@@ -785,7 +785,7 @@ The account is back to where it started. Here's what the lab showed.
 
 ## Conclusion And Resources
 
-Congratulations! You've built three refund agents on Cortex, observed them with both TruLens and Langfuse, and used Snowflake business data to find the false successes that cost, self-reported success and LLM judges missed.
+Congratulations! You've successfully built three refund agents on Cortex, observed them with both TruLens and Langfuse, and used Snowflake business data to find the false successes that cost, self-reported success and LLM judges missed.
 
 The agents' flaws were planted, but the lesson applies to real agents: a judge only sees the reply and the context you give it. It can tell when a reply contradicts the facts. It can't tell when the agent did the wrong thing and described it accurately. When the facts that decide right from wrong live in your data, the check has to run against your data.
 
