@@ -244,7 +244,7 @@ Langfuse ships its own US-dollar prices for many provider model names, including
 
 Each agent is one LangGraph graph with four steps: `fetch_facts → decide → refund_tool → respond`. The `decide` and `respond` steps call a Cortex model through `langchain-snowflake`'s `ChatSnowflake`. Every model call records its model, tokens and latency, so cost is measured rather than assumed.
 
-Open `notebooks/refund_agent_lab_v2.ipynb`. The first cell connects, checks the account, and builds the three graphs:
+Open `notebooks/refund_agent_lab.ipynb`. The first cell connects, checks the account, and builds the three graphs:
 
 ```python
 import logging
