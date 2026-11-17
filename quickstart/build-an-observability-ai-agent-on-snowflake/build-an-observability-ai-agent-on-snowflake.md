@@ -49,10 +49,10 @@ Before running anything, know this: **two of the three agents are broken on purp
 
 The refund window shrank from 30 to 14 days on 2026-11-07. Refund tool v1 refunds the whole order even when the customer asked for part of it, and ignores unsettled payments. Tool v2 refunds the requested amount and refuses unsettled payments. Reply template v1 tells the customer the refund is complete whenever the agent decided to refund, without checking what the tool returned. Template v2 sends the model's reply, which reports the tool result.
 
-Each flaw is designed to fool a different signal:
-- **Lean** is by far the cheapest agent, so a cost dashboard favors it. Its stale policy makes it refund orders that are inside the old 30-day window but outside the live 14-day window.
+The flaws are designed so that the usual signals favor a broken agent:
+- **Lean** is by far the cheapest agent, so a cost dashboard favors it. Its stale policy makes it refund orders that are inside the old 30-day window but outside the live 14-day window. Its replies describe those refunds accurately, which, as you'll see, is exactly what LLM judges can't catch.
 - **Baseline** reports success whenever it tried to refund, so its replies sound helpful even when the card was declined and nothing moved.
-- **Fixed** reports success least often, because most of the scenario requests should be declined. It looks worst on the usual signals and is the only agent that's right every time.
+- **Fixed** reports success least often, because many of the requests should be declined. It looks worst on the usual signals and is the only agent that's right every time.
 
 The flaws are in `src/refund_agent/agents.py`:
 
@@ -438,11 +438,21 @@ In the verification run (scenario set, simulation `APP_966D3009EB5C4CF4`, 30 run
 | Baseline | 1,781 | 2.9 s | 50% | 80% | $48.00 | 1 |
 | Fixed | 1,503 | 3.1 s | 40% | 100% | $0 | 0 |
 
-- **Cost** picks Lean, at about a fifteenth of the others' cost per request. It refunded both old-window orders under its stale policy, and the whole order on the partial request.
-- **Self-reported success** picks Lean, then Baseline. Baseline told the customer with a declined card that the refund was complete, because its reply template doesn't check the tool result.
+Ten requests per agent illustrate each flaw, but a difference of one request moves a rate by 10 points. The 300-run eval set (100 requests per agent, simulation `APP_4B0A5F583B984FA5`) gives steadier rates:
+
+| Agent | Microcredits / request | Median latency | Self-reported success | Business-correct | Money at risk | Customers misinformed |
+| --- | --- | --- | --- | --- | --- | --- |
+| Lean | 97 | 4.0 s | 49% | 70% | $1,100.60 | 7 |
+| Baseline | 1,747 | 3.0 s | 50% | 76% | $255.10 | 12 |
+| Fixed | 1,494 | 3.0 s | 38% | 100% | $0 | 0 |
+
+Every signal except business truth ranks a broken agent above Fixed:
+- **Cost** picks Lean, at about a fifteenth of the others' cost per request. It refunded old-window orders under its stale policy, and the whole order on partial requests.
+- **Self-reported success** ranks Lean and Baseline, tied at about half their requests, above Fixed. Baseline told customers with a declined card that the refund was complete, because its reply template doesn't check the tool result.
+- **Latency** doesn't help either. It barely separates the agents, and the smaller model was not the faster one here: each `claude-haiku-5-5` call took about 1.8 to 2.1 seconds against about 1.5 seconds for `claude-sonnet-5-5`.
 - **Only business truth** picks Fixed.
 
-Lean and Baseline fail differently: Lean loses money, while Baseline misleads customers. Your numbers can differ slightly, because the flaws are planted but each model decision is live.
+Lean and Baseline fail differently: Lean loses money, while Baseline misleads customers. [Measure Judge Agreement](#measure-judge-agreement) shows that the judges catch Baseline's false replies but pass Lean's wrong refunds, which makes Lean the agent that looks good on every common signal. Your numbers can differ slightly, because the flaws are planted but each model decision is live.
 
 ## Measure Judge Agreement
 
