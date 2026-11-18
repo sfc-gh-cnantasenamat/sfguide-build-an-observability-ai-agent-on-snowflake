@@ -715,14 +715,17 @@ Breaking the wrong runs down by root cause shows what groundedness can and can't
 
 Groundedness catches every reply that contradicts the facts. It can't catch an action that was wrong but described accurately, because the reply matches what the agent did. A refund under an out-of-date policy reads as a well-grounded, helpful reply. Only business truth catches those.
 
-A larger judge doesn't close this gap. On a second 300-run eval set, with the same 246 correct and 54 wrong runs, TruLens judged with the much larger `openai-gpt-6-astra` instead:
+A larger judge doesn't close this gap. The eval set was run twice more, each time with the same 246 correct and 54 wrong runs, and judged with a larger model: `openai-gpt-5.4`, the full-size model of the same generation, in both tools, and `openai-gpt-6-astra`, the largest available, in TruLens:
 
-| TruLens groundedness judge | Wrong runs caught | Stale-policy refunds passed | Whole-order refunds passed | Cohen's kappa |
-| --- | --- | --- | --- | --- |
-| `openai-gpt-5.4-mini` | 14 of 54 | 18 of 18 | 22 of 24 | 0.26 [0.08, 0.44] |
-| `openai-gpt-6-astra` | 16 of 54 | 18 of 18 | 20 of 24 | 0.32 [0.14, 0.50] |
+| Groundedness judge | Tool | Wrong runs caught | Stale-policy refunds passed | Whole-order refunds passed | Cohen's kappa |
+| --- | --- | --- | --- | --- | --- |
+| `openai-gpt-5.4-mini` | TruLens | 14 of 54 | 18 of 18 | 22 of 24 | 0.26 [0.08, 0.44] |
+| `openai-gpt-5.4` | TruLens | 16 of 54 | 18 of 18 | 20 of 24 | 0.35 [0.17, 0.52] |
+| `openai-gpt-6-astra` | TruLens | 16 of 54 | 18 of 18 | 20 of 24 | 0.32 [0.14, 0.50] |
+| `openai-gpt-5.4-mini` | Langfuse | 14 of 54 | 18 of 18 | 22 of 24 | 0.36 [0.17, 0.54] |
+| `openai-gpt-5.4` | Langfuse | 15 of 54 | 18 of 18 | 21 of 24 | 0.38 [0.20, 0.56] |
 
-The larger judge caught two more whole-order refunds, and its kappa is slightly higher, though the intervals overlap. It still passed every stale-policy refund, because the reply describes the refund accurately, and an accurate description of a wrong action is exactly what groundedness is meant to pass. The gap comes from the question the metric asks, not from the size of the model answering it. Langfuse wasn't part of this comparison: its evaluators call the model with tool calls through Cortex's chat completions endpoint, which `openai-gpt-6-astra` doesn't support.
+The larger judges caught one or two more whole-order refunds, and their kappa is slightly higher, but every interval overlaps. Every judge, in both tools, passed all 18 stale-policy refunds. The reply describes the refund accurately, and an accurate description of a wrong action is exactly what groundedness is meant to pass. The gap comes from the question the metric asks, not from the size of the model answering it. Langfuse couldn't use `openai-gpt-6-astra`: its evaluators make tool calls through Cortex's chat completions endpoint, which that model doesn't support.
 
 For reference, here are the full classifier metrics with 95% intervals. The two tools' groundedness intervals overlap, so neither tool's judge is clearly better:
 
@@ -739,7 +742,20 @@ To reproduce these numbers, run the eval set from the project folder. It takes a
 .venv/bin/python scripts/run_simulation.py --eval
 ```
 
-To repeat the larger-judge comparison, set the judge model for one run and leave Langfuse out. The larger judge costs much more per call (6.00 input and 30.00 output AI credits per million tokens, against 0.45 and 2.70 for `openai-gpt-5.4-mini`):
+To repeat a larger-judge comparison, set `REFUND_LAB_JUDGE_MODEL` for one run. A larger judge costs more per call than `openai-gpt-5.4-mini`. For a model Langfuse can use, such as `openai-gpt-5.4`, first switch Langfuse's evaluators to it, run the eval set, then switch them back:
+
+```bash
+export REFUND_LAB_JUDGE_MODEL=openai-gpt-5.4
+.venv/bin/python scripts/langfuse_llm_connection.py
+.venv/bin/python scripts/langfuse_models.py
+.venv/bin/python scripts/langfuse_native_evals.py
+.venv/bin/python scripts/run_simulation.py --eval
+unset REFUND_LAB_JUDGE_MODEL
+.venv/bin/python scripts/langfuse_llm_connection.py
+.venv/bin/python scripts/langfuse_native_evals.py
+```
+
+For `openai-gpt-6-astra`, leave Langfuse out instead:
 
 ```bash
 REFUND_LAB_JUDGE_MODEL=openai-gpt-6-astra .venv/bin/python scripts/run_simulation.py --eval --no-langfuse
