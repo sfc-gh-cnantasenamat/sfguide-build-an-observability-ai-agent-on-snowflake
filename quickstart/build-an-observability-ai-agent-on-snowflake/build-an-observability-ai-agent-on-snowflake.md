@@ -1,4 +1,4 @@
-author: Chanin Nantasenamat
+author: Chanin Nantasenamat, Josh Reini
 id: build-an-observability-ai-agent-on-snowflake
 categories: snowflake-site:taxonomy/solution-center/certification/quickstart, snowflake-site:taxonomy/product/ai
 language: en
