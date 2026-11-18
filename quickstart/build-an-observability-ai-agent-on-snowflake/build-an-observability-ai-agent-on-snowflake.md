@@ -614,7 +614,7 @@ cur.execute("ALTER WAREHOUSE REFUND_LAB_IWH SUSPEND")
 
 **Check:** `board` has one row per agent. Look only at the cost, latency, self-reported success and judge columns, and pick the agent you'd ship before reading on.
 
-In the verification run (scenario set, simulation `APP_966D3009EB5C4CF4`, 30 runs), the usual signals looked like this. Your IDs and exact numbers will differ, because each model decision is live:
+In a verification run of the scenario set (30 runs), the usual signals looked like this. Your IDs and exact numbers will differ, because each model decision is live:
 
 | Agent | Microcredits / request | Median latency | Self-reported success |
 | --- | --- | --- | --- |
@@ -632,7 +632,7 @@ Once you've picked, reveal business truth for the same run:
 | Baseline | 80% | $48.00 | 1 |
 | Fixed | 100% | $0 | 0 |
 
-Ten requests per agent illustrate each flaw, but a difference of one request moves a rate by 10 points. The 300-run eval set (100 requests per agent, simulation `APP_4B0A5F583B984FA5`) gives steadier rates:
+Ten requests per agent illustrate each flaw, but a difference of one request moves a rate by 10 points. The 300-run eval set (100 requests per agent) gives steadier rates:
 
 | Agent | Microcredits / request | Median latency | Self-reported success | Business-correct | Money at risk | Customers misinformed |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -652,7 +652,7 @@ Lean and Baseline fail differently: Lean loses money, while Baseline misleads cu
 
 ## Measure Judge Agreement
 
-Both tools judged every run with `openai-gpt-5.4-mini`: TruLens server-side in Snowflake, Langfuse in its own worker. Before you trust a judge to stand in for business truth, measure it against business truth, the way an LLM judge is benchmarked against a labelled dataset.
+Both tools judged every run with `openai-gpt-5.4-mini`: TruLens server-side in Snowflake, Langfuse in its own worker. Before you let a judge stand in for business truth, check how often it agrees with the real outcome, the way an LLM judge is benchmarked against a labelled dataset.
 
 The `JUDGE_AGREEMENT` view treats each judge as a classifier. A score of 0.5 or more is a pass, the judge's prediction that the run was correct, and `BUSINESS_CORRECT` is the label:
 - **Precision:** of the runs the judge passed, the share that were actually correct. A judge with low precision approves runs that lost money or misled a customer.
@@ -673,9 +673,9 @@ FROM REFUND_AGENT_LAB.DEMO.JUDGE_AGREEMENT WHERE COHORT_ID = ? ORDER BY METRIC, 
 
 **Check:** one row per tool and metric, four rows in all. If a TruLens row is missing, its scores are still computing; run the cell again in a few minutes.
 
-Don't rank the judges on your 30 runs: the intervals are too wide. In the verification scenario run (`APP_966D3009EB5C4CF4`), Langfuse groundedness had a kappa of 0.29 with an interval from -0.35 to 0.94, anywhere from worse than chance to nearly perfect. The results below come from the larger eval set instead.
+Don't rank the judges on your 30 runs: the intervals are too wide. In a verification run of the scenario set, Langfuse groundedness had a kappa of 0.29 with an interval from -0.35 to 0.94, anywhere from worse than chance to nearly perfect. The results below come from the larger eval set instead.
 
-The eval set (simulation `APP_4B0A5F583B984FA5`, 300 runs) has 246 correct runs and 54 wrong ones, and every wrong run traces to a planted flaw: 18 stale-policy refunds, 24 whole-order refunds and 12 false success replies.
+The 300-run eval set has 246 correct runs and 54 wrong ones, and every wrong run traces to a planted flaw: 18 stale-policy refunds, 24 whole-order refunds and 12 false success replies.
 
 The question that matters is simple: of the 54 wrong runs, how many did each judge catch?
 
