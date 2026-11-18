@@ -36,6 +36,7 @@ The lab uses several Snowflake features at once, so check that your account and 
 - Access to a [Snowflake account](https://signup.snowflake.com/?utm_source=snowflake-devrel&utm_medium=developer-guides&utm_cta=developer-guides) with Snowpark Container Services, external access integrations and interactive warehouses available. Not every account type has all three, so check before you start.
 - The `ACCOUNTADMIN` role, or a role that can create databases, users, roles, network policies, external access integrations, compute pools and warehouses
 - Access to the Cortex models `claude-haiku-5-5`, `claude-sonnet-5-5` and `openai-gpt-5.4-mini` in your region (directly or through cross-region inference)
+- Optional, only to repeat the larger-judge comparison: `openai-gpt-5.4` and `openai-gpt-6-astra`
 - Snowflake CLI 3.x with a connection to your account
 - Python 3.11, and Docker Desktop to copy the Langfuse images into your account's image repository
 - The companion repository for this guide, which you clone in [Get the Code](#get-the-code)
