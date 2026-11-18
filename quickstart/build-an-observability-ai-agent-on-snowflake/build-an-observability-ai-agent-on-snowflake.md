@@ -639,7 +639,7 @@ Lean and Baseline fail differently: Lean loses money, while Baseline misleads cu
 Both tools judged every run with `openai-gpt-5.4-mini`: TruLens server-side in Snowflake, Langfuse in its own worker. Before you trust a judge to stand in for business truth, measure it against business truth, the way an LLM judge is benchmarked against a labelled dataset.
 
 The `JUDGE_AGREEMENT` view treats each judge as a classifier. A score of 0.5 or more is a pass, the judge's prediction that the run was correct, and `BUSINESS_CORRECT` is the label:
-- **Precision:** of the runs the judge passed, the share that were actually correct. This is the number that matters most here: a judge with low precision approves runs that lost money or misled a customer.
+- **Precision:** of the runs the judge passed, the share that were actually correct. A judge with low precision approves runs that lost money or misled a customer.
 - **Recall:** of the correct runs, the share the judge passed.
 - **F1:** the balance of precision and recall.
 - **Cohen's kappa:** agreement beyond what chance would give. 0 means no better than chance; 1 means perfect agreement. It matters here because most runs are correct, so a judge that passes everything still scores high precision and F1, but a kappa near 0.
@@ -659,28 +659,36 @@ FROM REFUND_AGENT_LAB.DEMO.JUDGE_AGREEMENT WHERE COHORT_ID = ? ORDER BY METRIC, 
 
 The eval set (simulation `APP_4B0A5F583B984FA5`, 300 runs) has 246 correct runs and 54 wrong ones, and every wrong run traces to a planted flaw: 18 stale-policy refunds, 24 whole-order refunds and 12 false success replies.
 
-| Judge | Precision | Recall | F1 | Cohen's kappa |
-| --- | --- | --- | --- | --- |
-| Langfuse groundedness | 0.860 [0.815, 0.895] | 0.996 | 0.923 | 0.355 [0.172, 0.539] |
-| TruLens groundedness | 0.853 [0.807, 0.891] | 0.947 | 0.898 | 0.256 [0.075, 0.438] |
-| TruLens answer relevance | 0.850 [0.802, 0.888] | 0.898 | 0.874 | 0.196 [0.021, 0.371] |
-| Langfuse answer relevance | 0.816 [0.767, 0.856] | 0.955 | 0.880 | -0.038 [-0.263, 0.188] |
+The question that matters is simple: of the 54 wrong runs, how many did each judge catch?
 
-The confusion counts show where each judge goes wrong. A wrong run that a judge passes is the dangerous cell:
+| Judge | Wrong runs caught | Wrong runs passed | Cohen's kappa |
+| --- | --- | --- | --- |
+| Langfuse groundedness | 14 of 54 (26%) | 40 | 0.36 |
+| TruLens groundedness | 14 of 54 (26%) | 40 | 0.26 |
+| TruLens answer relevance | 15 of 54 (28%) | 39 | 0.20 |
+| Langfuse answer relevance | 1 of 54 (2%) | 53 | -0.04 |
 
-| Judge | Correct runs passed | Wrong runs passed | Correct runs failed | Wrong runs failed |
-| --- | --- | --- | --- | --- |
-| Langfuse groundedness | 245 | 40 | 1 | 14 |
-| TruLens groundedness | 233 | 40 | 13 | 14 |
-| TruLens answer relevance | 221 | 39 | 25 | 15 |
-| Langfuse answer relevance | 235 | 53 | 11 | 1 |
+No judge catches more than about a quarter of the wrong runs. Don't let precision flatter them: 246 of the 300 runs are correct, so a judge that passes everything scores 0.82 precision here. Every judge lands between 0.82 and 0.86, barely above that baseline, which is why kappa is the better summary.
 
-Read the two tables together:
-- **Groundedness is the more useful judge in both tools**, with the highest precision and kappa. The two tools' groundedness intervals overlap, so neither is clearly better.
-- **Answer relevance is close to chance.** Langfuse's version passed 53 of the 54 wrong runs. A reply can answer the customer's question directly and still be wrong about the money.
-- **Every judge passes about 40 wrong runs**, so roughly 1 in 7 runs a judge approves lost money or misled a customer.
+A confusion matrix shows where the mistakes fall. The dangerous cell is a wrong run the judge passed. Here are the best and the worst judge:
 
-Breaking the wrong runs down by root cause shows why:
+**Langfuse groundedness**
+
+| | Actually correct | Actually wrong |
+| --- | --- | --- |
+| **Judge passed** | 245 | 40 |
+| **Judge failed** | 1 | 14 |
+
+**Langfuse answer relevance**
+
+| | Actually correct | Actually wrong |
+| --- | --- | --- |
+| **Judge passed** | 235 | 53 |
+| **Judge failed** | 11 | 1 |
+
+Groundedness almost never fails a correct run, and it catches some wrong ones. Answer relevance passes nearly everything: a reply can answer the customer's question directly and still be wrong about the money. TruLens answer relevance catches one more wrong run than groundedness, but it also fails 25 correct runs, so its kappa is lower.
+
+Breaking the wrong runs down by root cause shows what groundedness can and can't see:
 
 | Judge | False success replies passed | Stale-policy refunds passed | Whole-order refunds passed |
 | --- | --- | --- | --- |
@@ -688,6 +696,15 @@ Breaking the wrong runs down by root cause shows why:
 | Langfuse groundedness | 0 of 12 | 18 of 18 | 22 of 24 |
 
 Groundedness catches every reply that contradicts the facts. It can't catch an action that was wrong but described accurately, because the reply matches what the agent did. A refund under an out-of-date policy reads as a well-grounded, helpful reply. Only business truth catches those.
+
+For reference, here are the full classifier metrics with 95% intervals. The two tools' groundedness intervals overlap, so neither tool's judge is clearly better:
+
+| Judge | Precision | Recall | F1 | Cohen's kappa |
+| --- | --- | --- | --- | --- |
+| Langfuse groundedness | 0.860 [0.815, 0.895] | 0.996 | 0.923 | 0.355 [0.172, 0.539] |
+| TruLens groundedness | 0.853 [0.807, 0.891] | 0.947 | 0.898 | 0.256 [0.075, 0.438] |
+| TruLens answer relevance | 0.850 [0.802, 0.888] | 0.898 | 0.874 | 0.196 [0.021, 0.371] |
+| Langfuse answer relevance | 0.816 [0.767, 0.856] | 0.955 | 0.880 | -0.038 [-0.263, 0.188] |
 
 To reproduce these numbers, run the eval set from the project folder. It takes about 20 minutes, plus the time the judges take:
 
