@@ -727,6 +727,8 @@ A larger judge doesn't close this gap. The eval set was run twice more, each tim
 
 The larger judges caught one or two more whole-order refunds, and their kappa is slightly higher, but every interval overlaps. Every judge, in both tools, passed all 18 stale-policy refunds. The reply describes the refund accurately, and an accurate description of a wrong action is exactly what groundedness is meant to pass. The gap comes from the question the metric asks, not from the size of the model answering it. Langfuse couldn't use `openai-gpt-6-astra`: its evaluators make tool calls through Cortex's chat completions endpoint, which that model doesn't support.
 
+For this use case, then, the mini judge performs about as well as the larger models at a fraction of the cost per call. None of them catches a wrong action that the agent describes accurately, so a larger judge isn't the fix. The check against business data is.
+
 For reference, here are the full classifier metrics with 95% intervals. The two tools' groundedness intervals overlap, so neither tool's judge is clearly better:
 
 | Judge | Precision | Recall | F1 | Cohen's kappa |
