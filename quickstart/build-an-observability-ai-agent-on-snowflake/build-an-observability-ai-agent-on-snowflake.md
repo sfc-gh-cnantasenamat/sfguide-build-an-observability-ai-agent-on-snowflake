@@ -14,9 +14,13 @@ fork repo link: https://github.com/sfc-gh-cnantasenamat/build-an-observability-a
 
 An AI agent can report success while doing the wrong thing with the money. A refund agent can say "your refund is on its way" when nothing posted, or refund an order that the current policy says it shouldn't. Cost dashboards, the agent's own success claims and LLM-as-a-judge scores often look fine in these cases, because none of them can see what actually happened in the business.
 
-Snowflake can see it. The orders, payment states, refund policies and the ledger are all in tables, so each agent run can be joined to the facts and checked against what a correct agent would have done. Cortex runs the agents' models inside your account, Snowpipe Streaming lands every run as it happens, TruLens (Snowflake AI Observability) and Langfuse each trace and judge the same runs, and a SQL view decides which runs were actually right.
+Snowflake can see it. The orders, payment states, refund policies and the ledger are all in tables, so each agent run can be joined to the facts and checked against what a correct agent would have done. In this lab:
+- Cortex runs the agents' models inside your account.
+- Snowpipe Streaming lands every run as it happens.
+- TruLens (Snowflake AI Observability) and Langfuse each trace and judge the same runs.
+- A SQL view decides which runs were actually right.
 
-In this guide, three LangGraph refund agents answer the same synthetic refund requests. Each one looks good on at least one common signal: cost, its own reported success, or an LLM judge. You run them, watch them with both observability tools, and then let business truth pick the winner. Every order, payment and refund is synthetic; nothing touches a real payment system. Here's what you'll take away from it.
+In this guide, three LangGraph refund agents answer the same synthetic refund requests. Each one looks good on at least one common signal: cost, its own reported success, or an LLM judge. You run them, watch them with both observability tools, and then let business truth pick the winner. Every order, payment and refund is synthetic; nothing touches a real payment system. By the end, you'll know how to do the following.
 
 ### What You'll Learn
 - How to call Cortex models from a LangGraph agent and record each call's tokens, latency and AI credits
@@ -45,7 +49,7 @@ With the prerequisites in place, here's the system you'll have at the end.
 ![Architecture: three LangGraph agents, run from the notebook or the Streamlit app, read business facts, call Cortex models and stream run rows through Snowpipe Streaming into Snowflake tables. TruLens and Langfuse trace the same runs and judge them on Cortex. The RUN_EVIDENCE view joins runs to business facts, JUDGE_AGREEMENT compares both tools' scores with it, and the app reads both, with the leaderboard served by an interactive warehouse.](assets/architecture-diagram.png)
 
 1. **Agents:** three LangGraph refund agents (Lean, Baseline and Fixed) handle each request in four steps. They read the order, payment and policy facts, and call Cortex models for their decisions and replies. You run them from the notebook or from the Streamlit app.
-2. **Streaming:** every finished run lands in the `RUNS`, `TRACE_EVENTS` and `LLM_CALLS` tables through each table's default Snowpipe Streaming pipe: the Python SDK from the notebook, the REST API from the app.
+2. **Streaming:** every finished run lands in the `RUNS`, `TRACE_EVENTS` and `LLM_CALLS` tables through Snowpipe Streaming. Each table has a default streaming pipe; the notebook writes to it with the Python SDK and the app with the REST API.
 3. **Observers:** TruLens records each agent as a version of one External Agent and judges its runs inside Snowflake; `TRULENS_SCORES` is a view over the AI Observability events it writes. Langfuse, running in your account on Snowpark Container Services, traces the same runs and judges them with its own evaluators; an export copies its traces and scores into `LANGFUSE_TRACES` and `LANGFUSE_SCORES`. Both tools judge with the same Cortex model, `openai-gpt-5.4-mini`.
 4. **Business truth:** the `RUN_EVIDENCE` view joins each run to the orders, payments and refund policies and decides whether it was right. It never looks at a judge score.
 5. **Judge agreement:** the `JUDGE_AGREEMENT` view treats each judge's scores as predictions and business truth as the label.
@@ -66,7 +70,7 @@ Before running anything, it helps to know how the three agents differ.
 The refund window shrank from 30 to 14 days on 2026-11-07. Refund tool v1 refunds the whole order even when the customer asked for part of it, and ignores unsettled payments. Tool v2 refunds the requested amount and refuses unsettled payments. Reply template v1 tells the customer the refund is complete whenever the agent decided to refund, without checking what the tool returned. Template v2 sends the model's reply, which reports the tool result.
 
 The flaws are designed so that the usual signals favor a broken agent:
-- **Lean** is by far the cheapest agent, so a cost dashboard favors it. Its stale policy makes it refund orders that are inside the old 30-day window but outside the live 14-day window. Its replies describe those refunds accurately, which, as you'll see, is exactly what LLM judges can't catch.
+- **Lean** is by far the cheapest agent, so a cost dashboard favors it. Its stale policy makes it refund orders that are inside the old 30-day window but outside the live 14-day window, and its tool refunds the whole order on partial requests. Its replies describe those refunds accurately. As you'll see, that's exactly what LLM judges can't catch.
 - **Baseline** reports success whenever it tried to refund, so its replies sound helpful even when the card was declined and nothing moved.
 - **Fixed** reports success least often, because many of the requests should be declined. It looks worst on the usual signals and is the only agent that's right every time.
 
@@ -258,7 +262,17 @@ snow sql --connection "$REFUND_LAB_CONNECTION" -q "PUT file://$PWD/langfuse_spcs
 
 **Check:** `mirror_images.sh` ends with `MIRROR_DONE`, `create_secrets.py` prints `Created ... secrets`, and `build_spec.py` prints `wrote ...langfuse.yaml`.
 
-`create_secrets.py` stores the Langfuse credentials as Snowflake secrets and writes a copy to `~/.langfuse_spcs.env` (mode 600). It never prints them. The Langfuse UI password must contain letters, digits and a special character, so set a stronger one before the first deploy (see the Langfuse README).
+`create_secrets.py` stores the Langfuse credentials as Snowflake secrets and writes a copy to `~/.langfuse_spcs.env` (mode 600). It never prints them.
+
+Langfuse rejects a UI password without letters, digits and a special character, and the generated one may not have a special character. Set your own before the service starts for the first time, or you won't be able to sign in to the Langfuse UI.
+
+**Run this step:** set the Langfuse UI password.
+
+```bash
+snow sql --connection "$REFUND_LAB_CONNECTION" -q "ALTER SECRET REFUND_AGENT_LAB.LANGFUSE.LF_INIT_USER_PASSWORD SET SECRET_STRING = '<strong password>'"
+```
+
+`MANAGE_LANGFUSE` takes an action and a URL. The URL is the address Langfuse puts in its own sign-in links, and only the `create` and `upgrade` actions use it; every other action ignores it, so the guide passes `http://localhost:3000` as a placeholder. You create the service with that placeholder because the real address doesn't exist until the service does, then switch to the real one.
 
 **Run this step:** create the service, then read its public URL.
 
@@ -268,8 +282,6 @@ snow sql --connection "$REFUND_LAB_CONNECTION" -q "CALL REFUND_AGENT_LAB.LANGFUS
 ```
 
 **Check:** the `endpoint` call returns the service's public host name, for example `abc123-myorg-myaccount.snowflakecomputing.app`. That is your `<ingress_url>`. If it returns nothing, the endpoint is still being provisioned; wait a minute and call it again.
-
-The second argument of `MANAGE_LANGFUSE` is the URL Langfuse uses for its own sign-in links. It starts as `http://localhost:3000` and changes to the real URL in the next step.
 
 **Run this step:** give Langfuse its real URL and let your role use the endpoint.
 
@@ -313,7 +325,7 @@ snow sql --connection "$REFUND_LAB_CONNECTION" -f langfuse_spcs/judge_access.sql
 bash scripts/rotate_judge_token.sh
 ```
 
-The script creates the token as the judge user (a token's role restriction must match the role of the session that creates it). It does that through a temporary key pair, which it removes again, along with the temporary permission, even if a step fails. It stores the token as the secret `REFUND_AGENT_LAB.LANGFUSE.CORTEX_JUDGE_PAT` and in `~/.langfuse_spcs.env`, and never prints it.
+A token can only be limited to a role if it's created in a session using that role, so the script signs in as the judge user to create it. It signs in with a temporary key pair and a temporary permission, and removes both afterwards, even if a step fails. It stores the token as the secret `REFUND_AGENT_LAB.LANGFUSE.CORTEX_JUDGE_PAT` and in `~/.langfuse_spcs.env`, and never prints it.
 
 **Check:** the output includes `Cortex REST test: 200` and `llm-connection: 200`.
 
@@ -465,7 +477,11 @@ A few details in this cell:
 
 The runs are in Snowflake and in both observers. Their judge scores come next.
 
-**Run this step:** collect the judge scores. Langfuse's judges score asynchronously, so the export waits for them, then copies the traces, Langfuse's own cost per call and the scores into Snowflake. It also posts `business_correct`, from the business oracle, beside them. TruLens computes its judges server-side in Snowflake, plus a client-side `business_correct` metric, in one call.
+The two tools score differently:
+- **Langfuse** scores in the background. The export waits for its judges, then copies the traces, Langfuse's own cost per call and the scores into Snowflake. It also posts each run's `business_correct` verdict to Langfuse, so you can compare the two there.
+- **TruLens** computes its judges in Snowflake when you ask. The same call adds a `business_correct` metric read from Snowflake.
+
+**Run this step:** collect the judge scores from both tools.
 
 ```python
 # Langfuse: read every trace back, wait for its own judges, load traces and scores into
@@ -489,7 +505,7 @@ for agent in AGENTS:
     print(f"TruLens {agent}: {status} ->", run.compute_metrics(list(TRULENS_METRICS) + [truth_metric]))
 ```
 
-The TruLens loop waits up to 5 minutes per agent for Snowflake to finish ingesting that agent's spans. `INVOCATION_COMPLETED` means all of them arrived; `PARTIALLY` means some did, which is enough to compute metrics. `business_correct` must be computed in the same `compute_metrics` call as the judge metrics: once TruLens computation starts for a run, Snowflake accepts no new metric spans for it.
+The TruLens loop waits up to 5 minutes per agent for Snowflake to finish receiving that agent's traces. `INVOCATION_COMPLETED` means all of them arrived; `PARTIALLY` means some did, which is enough to compute metrics. Ask for `business_correct` in the same `compute_metrics` call as the judge metrics: once TruLens starts computing metrics for a run, it can't add more to it later.
 
 **Check:** the Langfuse export reports the traces and scores it loaded, and each TruLens line ends with a confirmation that the metrics were submitted. TruLens finishes computing them in Snowflake a few minutes later.
 
@@ -596,7 +612,7 @@ cur.execute(f"USE WAREHOUSE {config.WAREHOUSE}")
 cur.execute("ALTER WAREHOUSE REFUND_LAB_IWH SUSPEND")
 ```
 
-**Check:** `board` has one row per agent. Look at its first columns only, and pick the agent you'd ship before reading on.
+**Check:** `board` has one row per agent. Look only at the cost, latency, self-reported success and judge columns, and pick the agent you'd ship before reading on.
 
 In the verification run (scenario set, simulation `APP_966D3009EB5C4CF4`, 30 runs), the usual signals looked like this. Your IDs and exact numbers will differ, because each model decision is live:
 
@@ -632,7 +648,7 @@ Every signal except business truth ranks a broken agent above Fixed:
 
 Lean's 7 misinformed customers in the eval set come from its buggy tool, not a false success claim. On those requests its model replied that the refund was still "being processed", while tool v1 had already posted the whole order.
 
-Lean and Baseline fail differently: Lean loses money, while Baseline misleads customers. The next section shows that the judges catch Baseline's false replies but pass Lean's wrong refunds, which makes Lean the agent that looks good on every common signal.
+Lean and Baseline fail differently: Lean loses money, while Baseline misleads customers. The next section shows that the judges catch Baseline's false replies but pass Lean's wrong refunds. Lean is the cheapest, ties on self-reported success and gets past the judges, so on the usual signals it's the agent a team would ship.
 
 ## Measure Judge Agreement
 
@@ -655,7 +671,9 @@ SELECT TOOL, METRIC, N, PASS_CORRECT, PASS_WRONG, FAIL_CORRECT, FAIL_WRONG,
 FROM REFUND_AGENT_LAB.DEMO.JUDGE_AGREEMENT WHERE COHORT_ID = ? ORDER BY METRIC, TOOL""", cohort)
 ```
 
-**Check:** one row per tool and metric, four rows in all. If a TruLens row is missing, its scores are still computing; run the cell again in a few minutes. On the 30-run scenario set the intervals are too wide to rank judges. In the verification scenario run (`APP_966D3009EB5C4CF4`), Langfuse groundedness had a kappa of 0.29 with an interval from -0.35 to 0.94: anywhere from worse than chance to nearly perfect. The results below come from the larger eval set instead.
+**Check:** one row per tool and metric, four rows in all. If a TruLens row is missing, its scores are still computing; run the cell again in a few minutes.
+
+Don't rank the judges on your 30 runs: the intervals are too wide. In the verification scenario run (`APP_966D3009EB5C4CF4`), Langfuse groundedness had a kappa of 0.29 with an interval from -0.35 to 0.94, anywhere from worse than chance to nearly perfect. The results below come from the larger eval set instead.
 
 The eval set (simulation `APP_4B0A5F583B984FA5`, 300 runs) has 246 correct runs and 54 wrong ones, and every wrong run traces to a planted flaw: 18 stale-policy refunds, 24 whole-order refunds and 12 false success replies.
 
@@ -739,8 +757,8 @@ The fixed scenario set is on by default; turn it off in the sidebar for random o
 
 The sidebar has two more switches:
 
-- **Write with Snowpipe Streaming** is on by default. A Streamlit app on container runtime can't sign in with an outside key pair, so the app doesn't use `REFUND_LAB_STREAMER`. It streams through the Snowpipe Streaming REST API with the session token Snowflake gives its container, as the app's owner role, so it needs no secret or extra integration. A note after each run lists the rows committed per table. If streaming fails, the run stops with an error instead of hanging; turn the switch off to use ordinary inserts.
-- **Serve the leaderboard on the interactive warehouse** is off by default. Turning it on resumes `REFUND_LAB_IWH`, and a caption under Pick a winner says which warehouse served the leaderboard. Each resume bills at least one hour and the warehouse can't auto-suspend in under 24 hours, so click **Suspend REFUND_LAB_IWH** next to that caption when you're done. The app's owner role needs `OPERATE` and `USAGE` on the warehouse; `ACCOUNTADMIN`, used throughout this guide, has both.
+- **Write with Snowpipe Streaming** is on by default. The app can't use `REFUND_LAB_STREAMER`, because a Streamlit app on container runtime can't sign in with an outside key pair. Instead it streams through the Snowpipe Streaming REST API, signed in with the session token Snowflake gives every app container. It writes as the app's owner role and needs no secret or extra integration. If streaming fails, the run stops with an error instead of hanging; turn the switch off to use ordinary inserts.
+- **Serve the leaderboard on the interactive warehouse** is off by default. Turning it on resumes `REFUND_LAB_IWH`. Each resume bills at least one hour and the warehouse can't auto-suspend in under 24 hours, so click **Suspend REFUND_LAB_IWH** under Pick a winner when you're done. The app's owner role needs `OPERATE` and `USAGE` on the warehouse; `ACCOUNTADMIN`, used throughout this guide, has both.
 
 **Run this step:** click **Run simulation**, then select your new simulation under Simulation to review.
 
@@ -767,7 +785,10 @@ snow sql --connection "$REFUND_LAB_CONNECTION" -q "ALTER WAREHOUSE REFUND_LAB_IW
 snow sql --connection "$REFUND_LAB_CONNECTION" -q "CALL REFUND_AGENT_LAB.LANGFUSE.MANAGE_LANGFUSE('suspend','http://localhost:3000')"
 ```
 
-To remove everything the lab created, run the statements below as `ACCOUNTADMIN`, in this order, in a Snowsight SQL worksheet (or save them to a file and run it with `snow sql -f`). Stop Langfuse first, because a compute pool can't be dropped while services run on it. Dropping the database removes every table, view, secret, network rule, the app and the External Agent. Drop `PYPI_ACCESS_INTEGRATION` only if the lab created it, since other apps in your account may use it.
+To remove everything the lab created, run the statements below as `ACCOUNTADMIN`, in this order, in a Snowsight SQL worksheet (or save them to a file and run it with `snow sql -f`). A few notes on the order:
+- Langfuse stops first, because a compute pool can't be dropped while services run on it.
+- Dropping the database removes every table, view, secret and network rule, plus the app and the External Agent.
+- Drop `PYPI_ACCESS_INTEGRATION` only if the lab created it, since other apps in your account may use it.
 
 ```sql
 ALTER TASK REFUND_AGENT_LAB.LANGFUSE.LANGFUSE_IDLE_SUSPEND SUSPEND;
